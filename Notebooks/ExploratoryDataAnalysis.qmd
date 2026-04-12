@@ -1,0 +1,21 @@
+---
+title: Análisis Exploratorio de Los Datos
+authors:
+    - Mateo Yáñez Tanaka
+    - Fernando Ramos Valdez
+    - Diego Barragán Castillo 
+    - Pedro Emilio Silva
+    - Fernando Pavía González
+format:
+    html:
+        toc: true
+        html-math-method: katex
+        df-print: kable
+        embed-resources: true
+        self-contained-math: true 
+---
+
+Este documento contiene el análisis exploratorio de los datos sobre la calidad del aire para el proyecto con los compañeros de IQ
+
+
+
