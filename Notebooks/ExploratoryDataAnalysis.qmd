@@ -13,9 +13,187 @@ format:
         df-print: kable
         embed-resources: true
         self-contained-math: true 
+echo: false 
 ---
 
 Este documento contiene el análisis exploratorio de los datos sobre la calidad del aire para el proyecto con los compañeros de IQ
 
+## Cargando la Base de Datos y Seleccionando Las Variables. 
+```{python}
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt 
+import seaborn as sns
+import matplotlib.dates as mdates
 
+
+
+data = pd.read_excel("../Data/Datos_maestro_sensores.xlsx")
+data.head()
+```
+```{python}
+data.info()
+```
+
+Los datos se ven muy bien y están bien formateados, las variabeles numéricas están todas tipificadas como números y las variables que no son numéricas se encuentran en el formato de `string`. Las variables importantes según nuestra investigación son las siguients:
+
+- `PM2_5_ugm3`: $PM_{2.5}$ medidas en partes por millón
+- `PM10_ugm3`: $PM_{10}$ medidas en partes por millón
+- `O3_ppm`: $O_3$ (ozóno troposférico) medido en partes por millón
+- `NO2_ppm`: $NO_2$ medido en partes por millón
+- `SO2_ppm`: $SO_2$ medido en partes por millón
+- `CO_ppm`: $CO$ medido en partes por millón
+
+Adicionalmente se conservarán los datos de una sola fuente, ya sea la que contenga más datos o alguna al azár si todas contienen la misma cantidad de datos. 
+
+```{python}
+data['sensor_periodo'].value_counts()
+```
+
+Vemos que en general el sensor D tiene la mayor cantidad de datos con 6208 en el periodo 1 y 7550 en el periodo 2. Por ende nos restingiremos únicamente a el sensor D.
+
+Ahora que ya restringimos a las variables que son relevantes según la investigación y que decidimos que sensor vamos a analizar podemos continuar con el análisis exploratorio.
+
+```{python}
+data = data[['sensor_periodo','datetime','PM2_5_ugm3','PM10_ugm3','O3_ppm','NO2_ppm','SO2_ppm','CO_ppm']]
+data = data[data['sensor_periodo'].str.contains('D')]
+```
+
+## Distribuciones
+
+Para comenzar veremos las distribuciones de los datos para comprender un poco mejor su estructura.
+
+```{python}
+sns.set(style="whitegrid")  
+fig, ax = plt.subplots(2, 3, figsize=(14, 8))
+ax = ax.flatten()
+
+cols = data.select_dtypes(include='number').columns
+
+for i, col in enumerate(cols):
+    sns.histplot(
+        data=data,
+        x=col,
+        bins=50,
+        kde=True,            
+        ax=ax[i],
+        color="steelblue"
+    )
+   
+    ax[i].set_title(col, fontsize=11)
+    ax[i].set_xlabel("")
+    ax[i].set_ylabel("")
+
+fig.suptitle('Distribuciones')
+
+plt.tight_layout()
+plt.savefig('../Figures/Distributions.png')
+
+plt.show()
+```
+
+Como se puede notar la mayría de las variables presentan distribuciones que parecen estar cezgadas a la izquierda pero con cola larga hacia la derecha. Parecen tener poca amplitud en sus curvas y en todas el valor más chico es el 0 lo cuál hace que se parezcan a distribuciones gamma o más que nada distribuciones log-normales. 
+
+Las implicaciones de estas distribuciones son relativamente buenas ya que señalan que tener valores extremadamente altos de estos contaminantes fueron poco comunes, esto, sin embargo, no niega que sería mejor que no hubiera presencia tan alta de estos contaminantes en absoluto. 
+
+Debido a la naturaleza de nuestros datos se puede determinar que estos dependen del momento en el que se tomaron por lo cuál también graficaremos sus series de tiempo.
+
+```{python}
+fig, ax = plt.subplots(2, 3, figsize=(14, 8))
+ax = ax.flatten()
+
+data = data.sort_values(by='datetime')
+
+for i, col in enumerate(cols):
+    sns.lineplot(
+        data=data,
+        x='datetime',
+        y=col,
+        ax=ax[i]
+    )
+    ax[i].xaxis.set_major_locator(mdates.AutoDateLocator())
+    ax[i].xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+
+    ax[i].tick_params(axis='x', rotation=45)
+
+    ax[i].set_title(col, fontsize=11)
+    ax[i].set_xlabel("")
+    ax[i].set_ylabel("")
+
+fig.suptitle('Timelines', fontsize=16)
+
+plt.tight_layout()
+plt.subplots_adjust(top=0.92)
+plt.savefig('../Figures/Timelines.png')
+
+plt.show()
+```
+
+Las linaes del tiempo nos revelan un poco más de información. En ellas podemos ver que hay tres periodos principales en los que se tomaron datos, con periodos muertos entre esos valores. También podemos ver que en varias variables se presentan periodos iniciales con mediciones extremadamente altas para varios de los contaminantes mientras que en otras tantas estos valores parecen incrementar con el timepo. 
+
+Estas características, especialmente la alta variabilidad y presencia de picos al inicio, podrían indicar anomalías en los datos, ya sea por errores de medición, cambios en las condiciones iniciales o eventos externos. Posteriormente, las variables muestran un comportamiento más estable, oscilando dentro de ciertos rangos esperados.
+
+## Correlaciones 
+
+Para entender mejor la estructura de nuestras variables también veremos las correlaciones entre las variables. Usaremos la correlación de Pearson que mide valores de correlación líneal. Tomaremos por correlaciones fuertes aquellas que sean mayores o iguales a 0.6 en valor absoluto y como sobreespecificaciones todas aquellas correlaciones mayores a 0.9 en valor absoluto. 
+
+```{python}
+corr_mat = data.corr(method='pearson', numeric_only=True)
+
+mask = np.triu(np.ones_like(corr_mat, dtype=bool))
+
+sns.heatmap(corr_mat, mask=mask, annot=True, cmap='coolwarm')
+
+plt.savefig('../Figures/CorrMat.png')
+
+```
+
+Como se puede notar hay una correlación decentemente alta siendo la de $PM_{10}$ con $PM_{2.5}$, otras que no caen en nustro rango de altaspero también merecen atención son las de $NO_2$ con $O3$ , la de $SO_2$ con $O3$ y la de $SO_2$ con $NO_2$. Un detalle interesante es que la variable de $CO$ parece ser decentemente independiente (al menos linealmente).
+
+Estas correlaciones podría ayudarnos a diseñarun modelo que pueda predecir la cantidad de alguno de estos contaminantes basado en los otros, o nos podría dar una idea de que variables usar al momento de generar un modelo que pueda predecir la calidad del aire.
+
+Para ver más claramente como estas correlaciones se ven en nuestros datos haremos también diagramas de dispersión entre las variables que mencionamos antes:
+
+```{python}
+fig, ax = plt.subplots(2, 2, figsize=(8,8))
+ax = ax.flatten()
+
+sns.scatterplot(
+    data = data,
+    x = 'PM10_ugm3',
+    y = 'PM2_5_ugm3',
+    ax=ax[0]
+)
+
+sns.scatterplot(
+    data = data,
+    x = 'NO2_ppm',
+    y = 'O3_ppm',
+    ax=ax[1]
+)
+
+sns.scatterplot(
+    data = data,
+    x = 'SO2_ppm',
+    y = 'O3_ppm',
+    ax=ax[2]
+)
+
+sns.scatterplot(
+    data = data,
+    x = 'SO2_ppm',
+    y = 'NO2_ppm',
+    ax=ax[3]
+)
+
+fig.suptitle("Dispersión de Variables con Correlaciones Altas")
+
+plt.tight_layout()
+plt.savefig('../Figures/Scatters.png')
+plt.show()
+```
+
+Los scatterplots nos muestran esta estructura de mejor manera, los datos de $PM_{10}$ y $PM_{2.5}$ parecen tener una estructura extremadamente lineal con unos cuantos puntos desviandose de ella y el resto de las correlaciones iteresantes no muestran mucho poruqe hay demasiada dispersión y muchos valores aglomerados cerca del 0. 
+
+Estas gráficas sugieren que el valor de $PM_{10}$ se puede describir con el de $PM_{2.5}$ (y viceseversa).
 
