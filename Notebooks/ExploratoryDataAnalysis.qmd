@@ -20,6 +20,9 @@ Este documento contiene el análisis exploratorio de los datos sobre la calidad 
 
 ## Cargando la Base de Datos y Seleccionando Las Variables. 
 ```{python}
+import sys
+sys.path.append("..")
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt 
@@ -35,7 +38,7 @@ data.head()
 data.info()
 ```
 
-Los datos se ven muy bien y están bien formateados, las variabeles numéricas están todas tipificadas como números y las variables que no son numéricas se encuentran en el formato de `string`. Las variables importantes según nuestra investigación son las siguients:
+Los datos se ven muy bien y están bien formateados, las variables numéricas están todas tipificadas como números y las variables que no son numéricas se encuentran en el formato de `string`. Las variables importantes según nuestra investigación son las siguients:
 
 - `PM2_5_ugm3`: $PM_{2.5}$ medidas en partes por millón
 - `PM10_ugm3`: $PM_{10}$ medidas en partes por millón
@@ -81,7 +84,7 @@ for i, col in enumerate(cols):
     )
    
     ax[i].set_title(col, fontsize=11)
-    ax[i].set_xlabel("")
+    ax[i].set_xlabel("") 
     ax[i].set_ylabel("")
 
 fig.suptitle('Distribuciones')
@@ -94,7 +97,7 @@ plt.show()
 
 Como se puede notar la mayría de las variables presentan distribuciones que parecen estar cezgadas a la izquierda pero con cola larga hacia la derecha. Parecen tener poca amplitud en sus curvas y en todas el valor más chico es el 0 lo cuál hace que se parezcan a distribuciones gamma o más que nada distribuciones log-normales. 
 
-Las implicaciones de estas distribuciones son relativamente buenas ya que señalan que tener valores extremadamente altos de estos contaminantes fueron poco comunes, esto, sin embargo, no niega que sería mejor que no hubiera presencia tan alta de estos contaminantes en absoluto. 
+Las implicaciones de estas distribuciones son relativamente buenas ya que señalan que tener valores extremadamente altos de estos contaminantes es extraño, esto, sin embargo, no niega que sería mejor que no hubiera presencia tan alta de estos contaminantes en absoluto. 
 
 Debido a la naturaleza de nuestros datos se puede determinar que estos dependen del momento en el que se tomaron por lo cuál también graficaremos sus series de tiempo.
 
@@ -129,7 +132,7 @@ plt.savefig('../Figures/Timelines.png')
 plt.show()
 ```
 
-Las linaes del tiempo nos revelan un poco más de información. En ellas podemos ver que hay tres periodos principales en los que se tomaron datos, con periodos muertos entre esos valores. También podemos ver que en varias variables se presentan periodos iniciales con mediciones extremadamente altas para varios de los contaminantes mientras que en otras tantas estos valores parecen incrementar con el timepo. 
+Las lineas del tiempo nos revelan un poco más de información. En ellas podemos ver que hay tres periodos principales en los que se tomaron datos, con periodos muertos entre esos valores. También podemos ver que en varias variables se presentan periodos iniciales con mediciones extremadamente altas para varios de los contaminantes mientras que en otras tantas estos valores parecen incrementar con el timepo. 
 
 Estas características, especialmente la alta variabilidad y presencia de picos al inicio, podrían indicar anomalías en los datos, ya sea por errores de medición, cambios en las condiciones iniciales o eventos externos. Posteriormente, las variables muestran un comportamiento más estable, oscilando dentro de ciertos rangos esperados.
 
@@ -197,3 +200,67 @@ Los scatterplots nos muestran esta estructura de mejor manera, los datos de $PM_
 
 Estas gráficas sugieren que el valor de $PM_{10}$ se puede describir con el de $PM_{2.5}$ (y viceseversa).
 
+# Pipeline de ETL
+
+Para continuar con el proyecto debemos diseñar una pipeline para la ingesta, transformación y carga de los datos. Esta pipeline toma en cuenta los detalles encontrados en el análisis exploratorio realizado anteriormente.
+
+En este análisis notamos lo siguiente:
+
+* Nuestras variables son 100% numéricas y por ende no necesitamos llevar acabo ningún tipo de encoding para variables categóricas.
+* Los datos se distribuyen mayormente log-normales, entonces aplicar logaritmo es una transformación que podríamos aplicar para obtener versiones más normales de las variables.
+* Las escalas de los datos varían bastante: hay algunas cuyo rango es de aproximadamente cero a 500 y otras que varían entre aproximadamente cero y 0.5, por lo que necesitan escalarse para que variables en mayor escala no dominen las predicciones.
+* El mínimo de nuestras variables está cerca de cero pero no es exactamente cero, por lo cual la transformación logarítmica funciona correctamente sin necesidad de agregar un offset.
+* El tiempo de muestreo no está perfectamente estandarizado, es decir las muestras no siempre se toman con la misma frecuencia.
+
+Ahora también necesitamos recordar el propósito original del proyecto: hacer predicciones de la calidad del aire. Dado que el índice de calidad del aire depende de las concentraciones de los contaminantes medidos, para predecirlo es necesario predecir los valores futuros de esas concentraciones, lo cual es un problema de forecasting de series de tiempo.
+
+Con esto en mente el proceso de ETL llevará a cabo los siguientes pasos:
+
+1. Regularizar la frecuencia de muestreo a 1 minuto mediante resampling.
+2. Imputar gaps cortos mediante interpolación lineal y eliminar gaps largos.
+3. Detectar y eliminar lecturas anómalas usando z-score sobre ventana rodante.
+4. Guardar los datos limpios en un CSV previo a cualquier transformación.
+5. Construir y serializar una pipeline de transformación logarítmica y escalado estándar sobre las columnas de concentraciones.
+
+```{python}
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import FunctionTransformer, StandardScaler
+from sklearn.compose import ColumnTransformer
+import pickle
+
+contaminant_cols = ['PM2_5_ugm3', 'PM10_ugm3', 'O3_ppm', 'NO2_ppm', 'SO2_ppm', 'CO_ppm']
+
+data = data.drop(columns=['sensor_periodo'])
+data = data.set_index("datetime")
+data = data.resample("1min").mean()
+
+data = data.interpolate(method="linear", limit=5)
+data = data.dropna()
+
+for col in contaminant_cols:
+    rolling_mean = data[col].rolling(30).mean()
+    rolling_std  = data[col].rolling(30).std()
+    z_scores     = (data[col] - rolling_mean) / rolling_std
+    data.loc[z_scores.abs() > 4, col] = np.nan
+
+data = data.interpolate(method="linear", limit=5)
+data = data.dropna()
+
+data.to_csv('../Data/datos_limpios.csv')
+
+log_transform = FunctionTransformer(np.log1p, inverse_func=np.expm1)
+
+preprocessor = ColumnTransformer(transformers=[
+    ('log_scale', Pipeline([
+        ('log',   log_transform),
+        ('scale', StandardScaler())
+    ]), contaminant_cols)
+], remainder='passthrough')
+
+preprocessor.fit(data)
+
+with open('../Models/pipeline.pkl', 'wb') as f:
+    pickle.dump(preprocessor, f)
+```
+
+Esta pipeline será guardada en un archivo llamado `Models/preprocessor.pkl` y también su código será conservado en `Scripts/preprocessor.py`
