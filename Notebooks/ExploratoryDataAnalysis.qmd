@@ -220,7 +220,8 @@ Con esto en mente el proceso de ETL llevará a cabo los siguientes pasos:
 2. Imputar gaps cortos mediante interpolación lineal y eliminar gaps largos.
 3. Detectar y eliminar lecturas anómalas usando z-score sobre ventana rodante.
 4. Guardar los datos limpios en un CSV previo a cualquier transformación.
-5. Construir y serializar una pipeline de transformación logarítmica y escalado estándar sobre las columnas de concentraciones.
+5. Dividir los datos en train y test respetando el orden cronológico.
+6. Construir y serializar una pipeline de transformación logarítmica y escalado estándar sobre las columnas de concentraciones, ajustada únicamente sobre el conjunto de entrenamiento.
 
 ```{python}
 from sklearn.pipeline import Pipeline
@@ -248,6 +249,10 @@ data = data.dropna()
 
 data.to_csv('../Data/datos_limpios.csv')
 
+split = int(len(data) * 0.8)
+train = data.iloc[:split]
+test  = data.iloc[split:]
+
 log_transform = FunctionTransformer(np.log1p, inverse_func=np.expm1)
 
 preprocessor = ColumnTransformer(transformers=[
@@ -257,7 +262,7 @@ preprocessor = ColumnTransformer(transformers=[
     ]), contaminant_cols)
 ], remainder='passthrough')
 
-preprocessor.fit(data)
+preprocessor.fit(train)
 
 with open('../Models/pipeline.pkl', 'wb') as f:
     pickle.dump(preprocessor, f)
